@@ -230,6 +230,6 @@ def escenario1paso4():
     plt.show()
     
     
-#escenario1paso2()
+escenario1paso2()
 escenario1paso4()
 
