@@ -5,153 +5,185 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm, t
 
 # --- Parámetros ---
-# Ruta del archivo de electroencefalograma (EEG) en formato EDF.
-EDF_FILE = './archivos/chb20_12.edf' 
-# Tiempos marcados en segundos donde inicia y termina la crisis epiléptica (seizure).
-START_SEC = 94
-END_SEC = 123
-# Tamaño de la ventana de contexto (en segundos) que queremos observar antes y después de la crisis.
-WINDOW_SEC = 120
+EDF_FILE   = './archivos/chb20_12.edf'
+START_SEC  = 94    # Segundo donde inicia la crisis
+END_SEC    = 123   # Segundo donde termina la crisis
+WINDOW_SEC = 120   # Contexto antes y después (2 minutos)
 
-# --- Carga ---
-# Lee el archivo EDF. Extrae las señales (datos crudos), la información de cada canal y el encabezado general.
+# --- Carga del archivo EDF ---
 signals, signal_headers, header = highlevel.read_edf(EDF_FILE)
-# Frecuencia de muestreo (muestras por segundo). Aquí está hardcodeada a 256 Hz.
-fs = 256 
+fs = 256  # Frecuencia de muestreo (Hz)
 
-# --- Muestras ---
-# Convierte los tiempos (segundos) a índices de array (muestras) multiplicando por la frecuencia de muestreo.
-start_sample = START_SEC * fs
-end_sample = END_SEC * fs
+# --- Conversión de tiempos a muestras ---
+start_sample   = START_SEC  * fs
+end_sample     = END_SEC    * fs
 window_samples = WINDOW_SEC * fs
-total_samples = signals.shape[1] # Número total de muestras en la señal
+total_samples  = signals.shape[1]
 
-# Calcula dónde empiezan y terminan las ventanas de contexto.
-# Usa max(0, ...) para evitar índices negativos si la crisis ocurre muy cerca del inicio.
 inicio_before = max(0, start_sample - window_samples)
-# Usa min(total, ...) para evitar salirnos del límite del archivo si la crisis ocurre cerca del final.
-fin_after = min(total_samples, end_sample + window_samples)
+fin_after     = min(total_samples, end_sample + window_samples)
 
 # --- Segmentación y centrado ---
 def extract_and_center(sig, s, e):
-    """
-    Extrae un fragmento de la señal y la "centra" restándole la media a cada canal.
-    Esto elimina el componente de corriente continua (DC offset) o línea base.
-    """
-    segment = sig[:, s:e] # Extrae todas las filas (canales) y las columnas desde 's' hasta 'e'
-    # Resta la media de cada canal (axis=1). keepdims=True mantiene la forma para poder restar correctamente.
+    """Extrae el segmento [s:e] para todos los canales y resta la media por canal (elimina DC offset)."""
+    segment = sig[:, s:e]
     return segment - segment.mean(axis=1, keepdims=True)
 
-# Extraemos los tres bloques de interés ya centrados en cero:
-before_centered = extract_and_center(signals, inicio_before, start_sample) # Antes de la crisis
-seizure_centered = extract_and_center(signals, start_sample, end_sample)   # Durante la crisis
-after_centered   = extract_and_center(signals, end_sample, fin_after)      # Después de la crisis
+before_centered  = extract_and_center(signals, inicio_before, start_sample)
+seizure_centered = extract_and_center(signals, start_sample, end_sample)
+after_centered   = extract_and_center(signals, end_sample, fin_after)
 
-# Une los tres segmentos consecutivamente en un solo bloque grande para análisis global.
 total_block = np.concatenate(
     (before_centered, seizure_centered, after_centered), axis=1
 )
 
-# imprimo resultados iniciales
 print(f"Frecuencia de muestreo: {fs} Hz")
-print(f"Dimensiones del bloque 'Before': {before_centered.shape}")
-print(f"Dimensiones del bloque 'Crisis': {seizure_centered.shape}")
-print(f"Dimensiones del bloque 'After': {after_centered.shape}")
-print(f"Dimensiones del 'Bloque Total': {total_block.shape}")
+print(f"Canales: {before_centered.shape[0]}")
+print(f"Dimensiones del bloque 'Before':  {before_centered.shape}")
+print(f"Dimensiones del bloque 'Crisis':  {seizure_centered.shape}")
+print(f"Dimensiones del bloque 'After':   {after_centered.shape}")
+print(f"Dimensiones del 'Bloque Total':   {total_block.shape}")
 
-
-# --- Descriptores ---
+# --- Descriptores estadísticos por bloque (todos los canales) ---
 def compute_stats(seg):
-    """
-    Calcula diversas métricas estadísticas para un segmento de señal dado.
-    """
-    var = np.var(seg, axis=1) # Varianza: qué tan dispersos están los datos
+    """Calcula descriptores estadísticos para todos los canales de un segmento."""
+    var = np.var(seg, axis=1)
     return {
         'var':      var,
-        'mean':     np.mean(seg,axis=1),
-        'std':      np.sqrt(var), # Desviación estándar: raíz de la varianza
-        'abs_mean': np.mean(np.abs(seg), axis=1), # Media de los valores absolutos (amplitud promedio)
-        'cov':      np.cov(seg), # Matriz de covarianza: cómo varían los canales juntos
-        'pearson':  np.corrcoef(seg), # Matriz de correlación de Pearson: relación lineal entre canales (-1 a 1)
+        'mean':     np.mean(seg, axis=1),
+        'std':      np.sqrt(var),
+        'abs_mean': np.mean(np.abs(seg), axis=1),
+        'cov':      np.cov(seg),
+        'pearson':  np.corrcoef(seg),
     }
 
-# Agrupamos los segmentos en un diccionario para procesarlos fácilmente con un bucle.
 segments = {
     'before':  before_centered,
     'seizure': seizure_centered,
     'after':   after_centered,
 }
 
-# Creamos un diccionario 'stats' que calcula y guarda las métricas para cada uno de los 3 segmentos.
 stats = {name: compute_stats(seg) for name, seg in segments.items()}
+n_canales = before_centered.shape[0]
 
-# --- Autocorrelación ---
-C0 = 0 # Índice del canal a analizar (Canal 0)
-# Calcula la autocorrelación para el canal 0 en los tres segmentos.
-# Esto mide qué tan similar es la señal consigo misma al desplazarla en el tiempo.
-autocorr = {
-    name: signal.correlate(seg[C0], seg[C0], mode='full')
-    for name, seg in segments.items()
-}
-
-# --- Reporte ---
-C0, C1 = 0, 1 # Seleccionamos los canales 0 y 1 para mostrar el reporte en pantalla
-
-print(f"fs: {fs} Hz | Bloque total: {total_block.shape}")
-
-# Imprime la varianza, desviación estándar y media absoluta SOLO para el canal 0 (C0) en los 3 periodos.
+# --- Reporte resumido (promedio sobre todos los canales) ---
+print(f"\n{'Descriptor':<14} {'Before (μ)':>12} {'Seizure (μ)':>12} {'After (μ)':>12} {'Ratio S/B':>12}")
 for metric in ('var', 'std', 'abs_mean'):
-    vals = " | ".join(
-        f"{name}: {stats[name][metric][C0]:.2f}"
-        for name in ('before', 'seizure', 'after')
-    )
-    print(f"{metric.upper():12} -> {vals}")
-
-# Imprime la covarianza y la correlación entre el canal 0 (C0) y el canal 1 (C1)
-# Compara el estado "antes" (before) con el estado "durante" (seizure).
-print(f"\nCovarianza C{C0}-C{C1}  -> "
-      f"Antes: {stats['before']['cov'][C0, C1]:.2f} | "
-      f"Crisis: {stats['seizure']['cov'][C0, C1]:.2f}")
-print(f"Pearson C{C0}-C{C1}     -> "
-      f"Antes: {stats['before']['pearson'][C0, C1]:.2f} | "
-      f"Crisis: {stats['seizure']['pearson'][C0, C1]:.2f}")
+    v_b = stats['before'][metric].mean()
+    v_s = stats['seizure'][metric].mean()
+    v_a = stats['after'][metric].mean()
+    print(f"{metric.upper():<14} {v_b:>12.2f} {v_s:>12.2f} {v_a:>12.2f} {v_s / (v_b + 1e-10):>12.2f}x")
 
 
-# --- ESCENARIO 1: Umbral Dinámico [min, max] de un Descriptor Estadístico ---
-def escenario1paso2():
-    descriptor = 'std'  # Podés cambiar a 'var','std', 'abs_mean', etc.
-
-    # Extraemos el descriptor para todos los canales en cada bloque
-    vals_before  = stats['before'][descriptor]   # shape: (n_canales,)
-    vals_seizure = stats['seizure'][descriptor]
-    vals_after   = stats['after'][descriptor]
-
-    # Umbral dinámico: [min, max] del descriptor en el bloque 'before'
-    umbral_min = vals_before.min()
-    umbral_max = vals_before.max()
-
-    n_canales = len(vals_before)
+# ==============================================================================
+# ESCENARIO 1 — Análisis de Discriminabilidad
+# Determina cuál descriptor separa mejor Before de Crisis en TODOS los canales.
+# El resultado (mejor descriptor + umbral) se exporta para el Escenario 2.
+# ==============================================================================
+def analisis_discriminabilidad():
+    """
+    Para cada descriptor escalar (var, std, abs_mean), calcula el ratio
+    seizure/before por canal. El descriptor con mayor ratio medio es el más
+    útil para construir un umbral de detección.
+    Retorna (mejor_descriptor, umbral_min, umbral_max).
+    """
+    descriptores = ['var', 'std', 'abs_mean']
     x_pos = np.arange(n_canales)
 
+    scores      = {}
+    mean_ratios = {}
+    for d in descriptores:
+        ratio       = stats['seizure'][d] / (stats['before'][d] + 1e-10)
+        scores[d]      = ratio
+        mean_ratios[d] = ratio.mean()
+
+    best = max(mean_ratios, key=mean_ratios.get)
+
+    print("\n--- Discriminabilidad (ratio Seizure/Before, promediado sobre todos los canales) ---")
+    for d in descriptores:
+        flag = " ← MEJOR" if d == best else ""
+        print(f"  {d.upper():<12} ratio medio: {mean_ratios[d]:.2f}x  "
+              f"| canal max: {scores[d].argmax()} ({scores[d].max():.2f}x){flag}")
+
+    # Gráfico 1: valores absolutos de cada descriptor, Before vs Crisis vs After (todos los canales)
+    fig, axes = plt.subplots(len(descriptores), 1, figsize=(14, 10), sharex=True)
+    fig.suptitle('Escenario 1 — Descriptores por Canal: Before vs Crisis vs After\n'
+                 '(todos los canales, para determinar el mejor descriptor)',
+                 fontsize=13, fontweight='bold')
+
+    w = 0.28
+    for ax, d in zip(axes, descriptores):
+        ax.bar(x_pos - w, stats['before'][d],  width=w, color='steelblue', alpha=0.8, label='Before')
+        ax.bar(x_pos,     stats['seizure'][d], width=w, color='tomato',    alpha=0.8, label='Crisis')
+        ax.bar(x_pos + w, stats['after'][d],   width=w, color='seagreen',  alpha=0.8, label='After')
+
+        ylabel = f'{d.upper()} ← MEJOR' if d == best else d.upper()
+        ax.set_ylabel(ylabel, fontsize=10, fontweight='bold' if d == best else 'normal')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.grid(axis='y', linestyle=':', alpha=0.4)
+
+    axes[-1].set_xlabel('Canal', fontsize=11)
+    axes[-1].set_xticks(x_pos)
+    axes[-1].set_xticklabels(x_pos, fontsize=7)
+    plt.tight_layout()
+    plt.show()
+
+    # Gráfico 2: ratio de discriminabilidad puro (seizure / before) por canal
+    fig2, axes2 = plt.subplots(len(descriptores), 1, figsize=(14, 8), sharex=True)
+    fig2.suptitle('Ratio de Discriminabilidad (Seizure/Before) por Canal\n'
+                  '(barras rojas = canal con ratio > 1.5)',
+                  fontsize=13, fontweight='bold')
+
+    for ax, d in zip(axes2, descriptores):
+        ratio  = scores[d]
+        colors = ['tomato' if r > 1.5 else 'steelblue' for r in ratio]
+        ax.bar(x_pos, ratio, color=colors, alpha=0.8, width=0.7)
+        ax.axhline(1.0, color='black', linestyle='--', linewidth=1.2, label='ratio=1 (sin cambio)')
+        ax.axhline(mean_ratios[d], color='orange', linestyle='-', linewidth=1.5,
+                   label=f'Media={mean_ratios[d]:.2f}x')
+        ylabel = f'{d.upper()} ← MEJOR' if d == best else d.upper()
+        ax.set_ylabel(ylabel, fontsize=9, fontweight='bold' if d == best else 'normal')
+        ax.legend(fontsize=8, loc='upper right')
+        ax.grid(axis='y', linestyle=':', alpha=0.4)
+
+    axes2[-1].set_xlabel('Canal', fontsize=11)
+    axes2[-1].set_xticks(x_pos)
+    axes2[-1].set_xticklabels(x_pos, fontsize=7)
+    plt.tight_layout()
+    plt.show()
+
+    umbral_min = stats['before'][best].min()
+    umbral_max = stats['before'][best].max()
+    print(f"\nUmbral [{best.upper()}] definido por bloque Before: [{umbral_min:.4f}, {umbral_max:.4f}]")
+    return best, umbral_min, umbral_max
+
+
+# ==============================================================================
+# ESCENARIO 1 — PASO 2: Umbral dinámico con el mejor descriptor
+# ==============================================================================
+def escenario1paso2(descriptor, umbral_min, umbral_max):
+    """
+    Grafica el descriptor elegido para los 3 bloques mostrando el umbral [min, max]
+    definido a partir del bloque Before. Canales fuera del rango se destacan en rojo.
+    """
+    x_pos = np.arange(n_canales)
     fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True, sharey=True)
+
     bloques = [
-        ('Antes (Reposo)',        vals_before,  'steelblue'),
-        ('Crisis (Epilepsia)',    vals_seizure, 'tomato'),
-        ('Después (Recuperación)',vals_after,   'seagreen'),
+        ('Antes (Reposo)',         stats['before'][descriptor],  'steelblue'),
+        ('Crisis (Epilepsia)',     stats['seizure'][descriptor], 'tomato'),
+        ('Después (Recuperación)', stats['after'][descriptor],   'seagreen'),
     ]
 
     for ax, (titulo, vals, color) in zip(axes, bloques):
-        # Zona umbral (rango normal definido por 'before')
         ax.axhspan(umbral_min, umbral_max, color='gold', alpha=0.25, zorder=0,
-                label=f'Rango Normal [{umbral_min:.2f}, {umbral_max:.2f}]')
+                   label=f'Rango Normal [{umbral_min:.2f}, {umbral_max:.2f}]')
         ax.axhline(umbral_max, color='orange', linestyle='--', linewidth=1.2)
         ax.axhline(umbral_min, color='orange', linestyle='--', linewidth=1.2)
 
-        # Coloreamos en rojo los canales que superan el umbral
         for i, v in enumerate(vals):
             fuera = v > umbral_max or v < umbral_min
-            ax.bar(i, v, color='red' if fuera else color,
-                alpha=0.8, width=0.7, zorder=2)
+            ax.bar(i, v, color='red' if fuera else color, alpha=0.8, width=0.7, zorder=2)
 
         ax.set_title(titulo, fontsize=11, fontweight='bold')
         ax.set_ylabel(descriptor.upper(), fontsize=10)
@@ -161,66 +193,142 @@ def escenario1paso2():
     axes[-1].set_xlabel('Canal', fontsize=11)
     axes[-1].set_xticks(x_pos)
     axes[-1].set_xticklabels(x_pos, fontsize=7)
-
     fig.suptitle(f'Umbral Dinámico [min, max] del descriptor "{descriptor.upper()}"\n'
-                f'por canal — Umbral definido por bloque "Antes"',
-                fontsize=13, fontweight='bold')
+                 f'por canal — Umbral definido por bloque "Antes"',
+                 fontsize=13, fontweight='bold')
     plt.tight_layout()
     plt.show()
 
 
-def escenario1paso4():
-    canal = 0
-
-    # 1. Extraemos las señales del Canal 0 para los 3 bloques
-    data_before = before_centered[canal, :]
-    data_seizure = seizure_centered[canal, :]
-    data_after = after_centered[canal, :]
-
-    # Creamos una figura con 3 subgráficos horizontales. 'axes' es un arreglo de 3 posiciones
+# ==============================================================================
+# ESCENARIO 1 — Heatmap de Correlación de Pearson (sincronía entre canales)
+# ==============================================================================
+def heatmap_pearson():
+    """
+    Muestra la matriz de correlación de Pearson entre todos los canales para
+    cada uno de los 3 bloques. La sincronía aumentada durante la crisis se
+    manifiesta como correlaciones más altas y uniformes en la matriz de crisis.
+    """
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    configs = [
+        ('before',  'Before (Reposo)',      'Blues'),
+        ('seizure', 'Crisis (Epilepsia)',   'Reds'),
+        ('after',   'After (Recuperación)', 'Greens'),
+    ]
 
-    # --- A. DIAGRAMA DE CAJAS ---
-    n_min = min(len(data_before), len(data_seizure), len(data_after)) 
-                # Lo usamos ya que la crisis es mucho mas corta que el resto de bloques, haciendo que el grafico no sea tan representativo, ...
-                #...  de esta manera el tamaño muestreal es igual para las 3 (evitando excesivos outliers)
-    
+    for ax, (name, titulo, cmap) in zip(axes, configs):
+        mat = stats[name]['pearson']
+        im  = ax.imshow(mat, cmap=cmap, vmin=-1, vmax=1, aspect='auto')
+        ax.set_title(titulo, fontweight='bold')
+        ax.set_xlabel('Canal')
+        ax.set_ylabel('Canal')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.suptitle('Matriz de Correlación de Pearson — Todos los Canales\n'
+                 '(la sincronía inter-canal aumenta notablemente durante la crisis)',
+                 fontsize=13, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+
+# ==============================================================================
+# ESCENARIO 1 — Autocorrelación para todos los canales (energía lag=0)
+# ==============================================================================
+def autocorr_todos_canales():
+    """
+    Calcula la energía de autocorrelación (valor en lag=0) para todos los canales
+    en los 3 bloques. La energía en lag=0 es proporcional a la potencia de la señal;
+    su aumento durante la crisis confirma la actividad neuronal excesiva.
+    """
+    def energia_lag0(seg):
+        energia = np.zeros(seg.shape[0])
+        for ch in range(seg.shape[0]):
+            ac = signal.correlate(seg[ch], seg[ch], mode='full')
+            energia[ch] = ac[len(ac) // 2]
+        return energia
+
+    e_before  = energia_lag0(before_centered)
+    e_seizure = energia_lag0(seizure_centered)
+    e_after   = energia_lag0(after_centered)
+
+    x_pos = np.arange(n_canales)
+    fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
+    fig.suptitle('Autocorrelación — Energía en lag=0 por Canal\n'
+                 '(todos los canales, confirma actividad excesiva durante la crisis)',
+                 fontsize=13, fontweight='bold')
+
+    for ax, (titulo, energia, color) in zip(axes, [
+        ('Before (Reposo)',      e_before,  'steelblue'),
+        ('Crisis (Epilepsia)',   e_seizure, 'tomato'),
+        ('After (Recuperación)', e_after,   'seagreen'),
+    ]):
+        ax.bar(x_pos, energia, color=color, alpha=0.8, width=0.7)
+        ax.set_title(titulo, fontweight='bold')
+        ax.set_ylabel('Energía Autocorr (lag=0)', fontsize=9)
+        ax.grid(axis='y', linestyle=':', alpha=0.4)
+
+    axes[-1].set_xlabel('Canal', fontsize=11)
+    axes[-1].set_xticks(x_pos)
+    axes[-1].set_xticklabels(x_pos, fontsize=7)
+    plt.tight_layout()
+    plt.show()
+
+
+# ==============================================================================
+# ESCENARIO 1 — PASO 4: Histograma, PDF, Boxplot, Scatter
+# ==============================================================================
+def escenario1paso4():
+    """
+    Boxplot e histograma sobre el canal 0 (caso representativo) para los 3 bloques.
+    Scatter plot de (μ, σ) usa TODOS los canales en los 3 estados.
+    """
+    canal = 0
+    data_before  = before_centered[canal, :]
+    data_seizure = seizure_centered[canal, :]
+    data_after   = after_centered[canal, :]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle('Escenario 1 — Histograma, PDF, Boxplot y Scatter',
+                 fontsize=13, fontweight='bold')
+
+    # A. Diagrama de cajas: longitud igualada al segmento más corto para comparación justa
+    n_min = min(len(data_before), len(data_seizure), len(data_after))
     axes[0].boxplot(
         [data_before[:n_min], data_seizure[:n_min], data_after[:n_min]],
         labels=['Antes', 'Crisis', 'Después']
     )
-    axes[0].set_title(f'Diagrama de Cajas - Canal {canal}', fontweight='bold')
-    axes[0].set_ylabel('Amplitud de la señal (μV)')
+    axes[0].set_title(f'Diagrama de Cajas — Canal {canal}', fontweight='bold')
+    axes[0].set_ylabel('Amplitud (μV)')
     axes[0].grid(axis='y', linestyle=':', alpha=0.6)
 
-    # --- B. HISTOGRAMA Y PDF en axes[1] ---
-    # Graficamos el histograma del bloque 'Crisis' como ejemplo
-    counts, bins, patches = axes[1].hist(data_seizure, bins=50, density=True, alpha=0.5, color='tomato', label='Datos empíricos (Crisis)')
+    # B. Histograma superpuesto de los 3 bloques + ajuste de PDF sobre la crisis
+    for datos, label, color in [
+        (data_before,  'Before',  'steelblue'),
+        (data_seizure, 'Crisis',  'tomato'),
+        (data_after,   'Después', 'seagreen'),
+    ]:
+        axes[1].hist(datos, bins=50, density=True, alpha=0.35, color=color, label=label)
 
-    # Ajustamos una PDF Normal (Gaussiana)
-    mu, std = norm.fit(data_seizure)
-    p_norm = norm.pdf(bins, mu, std)
-    axes[1].plot(bins, p_norm, 'k--', linewidth=2, label=f'Normal\n(μ={mu:.2f}, σ={std:.2f})')
+    bins_range = np.linspace(data_seizure.min(), data_seizure.max(), 200)
+    mu_n, std_n        = norm.fit(data_seizure)
+    df_t, loc_t, scale_t = t.fit(data_seizure)
+    axes[1].plot(bins_range, norm.pdf(bins_range, mu_n, std_n),
+                 'k--', linewidth=2, label=f'Normal (μ={mu_n:.1f}, σ={std_n:.1f})')
+    axes[1].plot(bins_range, t.pdf(bins_range, df_t, loc_t, scale_t),
+                 'b-',  linewidth=2, label=f't-loc-scale (df={df_t:.1f})')
+    axes[1].set_title(f'Histograma + PDF — Canal {canal}', fontweight='bold')
+    axes[1].legend(fontsize=8)
+    axes[1].grid(linestyle=':', alpha=0.4)
 
-    # Ajustamos una PDF t-location-scale (t-Student) sugerida en la teoría
-    df, loc, scale = t.fit(data_seizure)
-    p_t = t.pdf(bins, df, loc, scale)
-    axes[1].plot(bins, p_t, 'b-', linewidth=2, label='t-location-scale')
-
-    axes[1].set_title('Histograma y Ajuste de PDF (Crisis)', fontweight='bold')
-    axes[1].legend()
-
-    # --- C. SCATTER PLOT (Diagrama de dispersión de parámetros) en axes[2] ---
-    # Extraemos la media y desviación estándar de todos los 28 canales usando tu diccionario 'stats'
-    mu_before = stats['before']['mean']
-    sigma_before = stats['before']['std']
-
-    mu_seizure = stats['seizure']['mean']
-    sigma_seizure = stats['seizure']['std']
-
-    axes[2].scatter(mu_before, sigma_before, color='steelblue', label='0 (Normal)', alpha=0.7)
-    axes[2].scatter(mu_seizure, sigma_seizure, color='tomato', label='1 (Crisis)', alpha=0.7)
-    axes[2].set_title('Scatter plot classification (μ vs σ)', fontweight='bold')
+    # C. Scatter (μ, σ) para TODOS los canales en los 3 estados
+    for name, color, label in [
+        ('before',  'steelblue', 'Before'),
+        ('seizure', 'tomato',    'Crisis'),
+        ('after',   'seagreen',  'After'),
+    ]:
+        axes[2].scatter(stats[name]['mean'], stats[name]['std'],
+                        color=color, label=label, alpha=0.7, s=40)
+    axes[2].set_title('Scatter μ vs σ — Todos los Canales', fontweight='bold')
     axes[2].set_xlabel('Media (μ)')
     axes[2].set_ylabel('Desviación Estándar (σ)')
     axes[2].legend()
@@ -228,8 +336,24 @@ def escenario1paso4():
 
     plt.tight_layout()
     plt.show()
-    
-    
-escenario1paso2()
-escenario1paso4()
 
+
+# ==============================================================================
+# EJECUCIÓN
+# ==============================================================================
+
+# 1. Análisis de discriminabilidad → elige el mejor descriptor y calcula umbral
+#    BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1 son importados por arch2.py
+BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1 = analisis_discriminabilidad()
+
+# 2. Gráfico de umbral dinámico por canal con el mejor descriptor
+escenario1paso2(BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1)
+
+# 3. Heatmap de correlación de Pearson (sincronía inter-canal)
+heatmap_pearson()
+
+# 4. Autocorrelación para todos los canales
+autocorr_todos_canales()
+
+# 5. Histograma, PDF, Boxplot y Scatter
+escenario1paso4()
