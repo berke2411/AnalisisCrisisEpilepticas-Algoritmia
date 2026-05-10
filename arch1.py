@@ -47,14 +47,22 @@ print(f"Dimensiones del 'Bloque Total':   {total_block.shape}")
 # --- Descriptores estadísticos por bloque (todos los canales) ---
 def compute_stats(seg):
     """Calcula descriptores estadísticos para todos los canales de un segmento."""
-    var = np.var(seg, axis=1)
+    var         = np.var(seg, axis=1)
+    pearson_mat = np.corrcoef(seg)
+    cov_mat     = np.cov(seg)
+    cov_offdiag = cov_mat.copy()
+    np.fill_diagonal(cov_offdiag, 0)
+    mask_off    = ~np.eye(seg.shape[0], dtype=bool)
     return {
-        'var':      var,
-        'mean':     np.mean(seg, axis=1),
-        'std':      np.sqrt(var),
-        'abs_mean': np.mean(np.abs(seg), axis=1),
-        'cov':      np.cov(seg),
-        'pearson':  np.corrcoef(seg),
+        'var':              var,
+        'mean':             np.mean(seg, axis=1),
+        'std':              np.sqrt(var),
+        'abs_mean':         np.mean(np.abs(seg), axis=1),
+        'cov':              cov_mat,
+        'pearson':          pearson_mat,
+        # escalares de sincronía inter-canal (un valor por bloque, no por canal)
+        'pearson_sync':     float(np.nanmean(np.abs(pearson_mat[mask_off]))),
+        'frob_cov':         float(np.linalg.norm(cov_offdiag, 'fro')),
     }
 
 segments = {
@@ -66,19 +74,39 @@ segments = {
 stats = {name: compute_stats(seg) for name, seg in segments.items()}
 n_canales = before_centered.shape[0]
 
-# --- Reporte resumido (promedio sobre todos los canales) ---
-print(f"\n{'Descriptor':<14} {'Before (μ)':>12} {'Seizure (μ)':>12} {'After (μ)':>12} {'Ratio S/B':>12}")
+# --- Reporte resumido ---
+print(f"\n{'Descriptor':<16} {'Before':>12} {'Seizure':>12} {'After':>12} {'Ratio S/B':>12}")
+print(f"{'─'*64}")
+# Métricas por canal (promedio sobre canales)
 for metric in ('var', 'std', 'abs_mean'):
     v_b = stats['before'][metric].mean()
     v_s = stats['seizure'][metric].mean()
     v_a = stats['after'][metric].mean()
-    print(f"{metric.upper():<14} {v_b:>12.2f} {v_s:>12.2f} {v_a:>12.2f} {v_s / (v_b + 1e-10):>12.2f}x")
+    print(f"{metric.upper():<16} {v_b:>12.2f} {v_s:>12.2f} {v_a:>12.2f} {v_s / (v_b + 1e-10):>12.2f}x")
+print(f"{'─'*64}")
+# Escalares de sincronía inter-canal (un valor por bloque)
+for metric, label in (('pearson_sync', 'PEARSON_SYNC'), ('frob_cov', 'FROB_COV')):
+    v_b = stats['before'][metric]
+    v_s = stats['seizure'][metric]
+    v_a = stats['after'][metric]
+    print(f"{label:<16} {v_b:>12.4f} {v_s:>12.4f} {v_a:>12.4f} {v_s / (v_b + 1e-10):>12.2f}x")
+
+
+def _best_descriptor():
+    """Calcula el mejor descriptor y umbral [min, max] sin generar gráficos.
+    Exportado para que arch2.py lo importe sin disparar plots."""
+    descriptores = ['var', 'std', 'abs_mean']
+    mean_ratios = {}
+    for d in descriptores:
+        ratio = stats['seizure'][d] / (stats['before'][d] + 1e-10)
+        mean_ratios[d] = ratio.mean()
+    best = max(mean_ratios, key=mean_ratios.get)
+    return best, float(stats['before'][best].min()), float(stats['before'][best].max())
 
 
 # ==============================================================================
 # ESCENARIO 1 — Análisis de Discriminabilidad
 # Determina cuál descriptor separa mejor Before de Crisis en TODOS los canales.
-# El resultado (mejor descriptor + umbral) se exporta para el Escenario 2.
 # ==============================================================================
 def analisis_discriminabilidad():
     """
@@ -232,6 +260,44 @@ def heatmap_pearson():
 
 
 # ==============================================================================
+# ESCENARIO 1 — Heatmap de Covarianza (sincronía inter-canal en magnitud)
+# ==============================================================================
+def heatmap_covarianza():
+    """
+    Muestra la matriz de covarianza entre todos los canales para los 3 bloques.
+    Complementa el heatmap de Pearson: mientras Pearson mide correlación normalizada
+    (sin unidades), la covarianza preserva la magnitud de la co-variación.
+    Elementos off-diagonal grandes = canales co-variando fuertemente = sincronía.
+    Se usa escala simétrica común a los 3 bloques para comparación directa.
+    """
+    configs = [
+        ('before',  'Before (Reposo)',      'Blues'),
+        ('seizure', 'Crisis (Epilepsia)',   'Reds'),
+        ('after',   'After (Recuperación)', 'Greens'),
+    ]
+
+    vmax = max(np.abs(stats[name]['cov']).max() for name, _, _ in configs)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    for ax, (name, titulo, cmap) in zip(axes, configs):
+        mat = stats[name]['cov']
+        im  = ax.imshow(mat, cmap=cmap, vmin=0, vmax=vmax, aspect='auto')
+        ax.set_title(
+            f"{titulo}\nFrob off-diag = {stats[name]['frob_cov']:.1f}",
+            fontweight='bold'
+        )
+        ax.set_xlabel('Canal')
+        ax.set_ylabel('Canal')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.suptitle('Matriz de Covarianza — Todos los Canales\n'
+                 '(off-diagonal grande = canales co-variando = sincronía epiléptica)',
+                 fontsize=13, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+
+# ==============================================================================
 # ESCENARIO 1 — Autocorrelación para todos los canales (energía lag=0)
 # ==============================================================================
 def autocorr_todos_canales():
@@ -342,18 +408,24 @@ def escenario1paso4():
 # EJECUCIÓN
 # ==============================================================================
 
-# 1. Análisis de discriminabilidad → elige el mejor descriptor y calcula umbral
-#    BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1 son importados por arch2.py
-BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1 = analisis_discriminabilidad()
+# Calcula el mejor descriptor y umbral sin plots (importable por arch2.py).
+BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1 = _best_descriptor()
 
-# 2. Gráfico de umbral dinámico por canal con el mejor descriptor
-escenario1paso2(BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1)
+if __name__ == '__main__':
+    # 1. Análisis de discriminabilidad completo (con gráficos)
+    analisis_discriminabilidad()
 
-# 3. Heatmap de correlación de Pearson (sincronía inter-canal)
-heatmap_pearson()
+    # 2. Umbral dinámico por canal con el mejor descriptor
+    escenario1paso2(BEST_DESCRIPTOR, UMBRAL_MIN_E1, UMBRAL_MAX_E1)
 
-# 4. Autocorrelación para todos los canales
-autocorr_todos_canales()
+    # 3a. Heatmap de correlación de Pearson (sincronía normalizada)
+    heatmap_pearson()
 
-# 5. Histograma, PDF, Boxplot y Scatter
-escenario1paso4()
+    # 3b. Heatmap de covarianza (sincronía en magnitud)
+    heatmap_covarianza()
+
+    # 4. Autocorrelación para todos los canales
+    autocorr_todos_canales()
+
+    # 5. Histograma, PDF, Boxplot y Scatter
+    escenario1paso4()
