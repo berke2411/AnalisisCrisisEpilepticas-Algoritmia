@@ -89,12 +89,12 @@ La ventaja de este enfoque es que permite comparar de forma directa el comportam
 
 La FFT permite observar la magnitud de las componentes frecuenciales de cada bloque. La PSD por Welch estima la densidad espectral de potencia, promediando ventanas internas y reduciendo la variabilidad respecto de una transformada directa.
 
-En el grafico `Escenario 1 - FFT y PSD por bloques - Canal 0` se observan dos paneles:
+En el grafico `Escenario 1 - FFT y PSD por bloques - Todos los canales` se observan dos paneles:
 
 - Arriba: FFT, magnitud espectral.
 - Abajo: PSD por Welch, potencia por Hz.
 
-En ambos casos se compara `Before`, `Crisis` y `After` para el canal 0.
+En ambos casos se superponen los 28 canales del EEG como lineas finas y semitransparentes, coloreadas segun el bloque (`Before` en azul, `Crisis` en rojo, `After` en verde). La media entre todos los canales se resalta con una linea gruesa del mismo color. Esta representacion permite observar simultaneamente la variabilidad entre canales y la tendencia promedio de cada etapa.
 
 En la salida por consola se imprimen las frecuencias dominantes. Para el caso analizado:
 
@@ -151,7 +151,7 @@ Beta y Gamma discriminan mejor la crisis por aumento relativo.
 
 El periodograma estima la densidad espectral de potencia directamente a partir de la senal completa de cada bloque. A diferencia de Welch, no promedia varias ventanas, por lo que puede mostrar mas variabilidad.
 
-El grafico `Escenario 1 - Periodograma por bloques - Canal 0` muestra la potencia por frecuencia para `Before`, `Crisis` y `After`.
+El grafico `Escenario 1 - Periodograma por bloques - Todos los canales` muestra la potencia por frecuencia para `Before`, `Crisis` y `After`. Se superponen los 28 canales con lineas finas y semitransparentes; la media de cada bloque se muestra en negrita y el canal con mayor potencia total se indica con linea discontinua. Esto permite observar el rango de variacion entre canales y cuales se comportan distinto al promedio.
 
 Resultados por consola:
 
@@ -174,7 +174,7 @@ Ventana: 2 segundos
 Overlap: 50%
 ```
 
-El grafico `Escenario 1 - STFT por bloques - Canal 0` muestra tres espectrogramas, uno para cada bloque.
+El grafico `Escenario 1 - STFT por bloques - Promedio de todos los canales` muestra tres espectrogramas, uno para cada bloque. Cada espectrograma es el promedio de potencia entre los 28 canales, lo que suaviza el ruido individual y revela la tendencia espectral general del cerebro en cada etapa. El eje vertical es frecuencia (hasta 64 Hz) y el eje horizontal es tiempo dentro del bloque.
 
 Resultados por consola:
 
@@ -246,7 +246,7 @@ La crisis queda ubicada dentro del bloque total entre:
 
 ### 5.1 FFT y PSD del bloque total
 
-El grafico `Escenario 2 - FFT y PSD del bloque total - Canal 0` muestra la FFT y la PSD de toda la senal concatenada.
+El grafico `Escenario 2 - FFT y PSD del bloque total - Todos los canales` muestra la FFT y la PSD de toda la senal concatenada. Al igual que en el Escenario 1, se representan los 28 canales como lineas finas semitransparentes y la media como linea negra gruesa.
 
 Frecuencias dominantes impresas por consola:
 
@@ -325,12 +325,12 @@ Las ventanas de crisis se separan claramente de las ventanas Before. Esto muestr
 
 ### 5.5 Periodograma y STFT del bloque total
 
-El grafico `Escenario 2 - Periodograma y STFT del bloque total - Canal 0` combina:
+El grafico `Escenario 2 - Periodograma y STFT del bloque total - Todos los canales` combina:
 
-- Periodograma del bloque total.
-- STFT del bloque total con la crisis marcada.
+- Periodograma del bloque total, con los 28 canales superpuestos (lineas finas) y la media en negro.
+- STFT del bloque total usando el promedio de todos los canales, con la zona de crisis marcada en rojo.
 
-La STFT permite observar la evolucion temporal del contenido frecuencial. La zona de crisis aparece resaltada, permitiendo comparar visualmente si el aumento de energia coincide con el intervalo anotado.
+La STFT permite observar la evolucion temporal del contenido frecuencial. La zona de crisis aparece resaltada, permitiendo comparar visualmente si el aumento de energia coincide con el intervalo anotado. Usar el promedio de canales en la STFT reduce el ruido individual y hace mas visible el patron temporal general.
 
 Resultados de STFT total:
 

@@ -30,13 +30,20 @@ def imprimir_frecuencias_dominantes(nombre, freqs, spectrum):
         print(f"  {f:6.2f} Hz  valor medio={amp:.6g}")
 
 
-def escenario1_fft_psd(segmentos, fs, canal=0):
+def escenario1_fft_psd(segmentos, fs):
+    """
+    FFT y PSD por bloque (Before, Crisis, After).
+    Cada bloque se representa como: linea gruesa = media entre canales,
+    banda sombreada = +/- 1 desv. estandar entre canales.
+    Esto resume los 28 canales sin superposicion confusa.
+    """
     bloques = ["before", "crisis", "after"]
     colores = {"before": "steelblue", "crisis": "tomato", "after": "seagreen"}
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 9), sharex=False)
     fig.suptitle(
-        f"Escenario 1 - FFT y PSD por bloques - Canal {canal}",
+        "Escenario 1 - FFT y PSD por bloques\n"
+        "(linea gruesa: media entre canales | banda: ±1 desv. estandar)",
         fontsize=13,
         fontweight="bold",
     )
@@ -49,29 +56,34 @@ def escenario1_fft_psd(segmentos, fs, canal=0):
         imprimir_frecuencias_dominantes(f"{name.upper()} FFT", f_fft, fft_mag)
         imprimir_frecuencias_dominantes(f"{name.upper()} PSD", f_psd, psd)
 
-        axes[0].plot(
-            f_fft[f_fft <= 64],
-            fft_mag[canal, f_fft <= 64],
-            color=colores[name],
-            alpha=0.85,
-            label=name,
-        )
-        axes[1].semilogy(
-            f_psd[f_psd <= 64],
-            psd[canal, f_psd <= 64],
-            color=colores[name],
-            alpha=0.85,
-            label=name,
-        )
+        color = colores[name]
+        mask_fft = f_fft <= 64
+        mask_psd = f_psd <= 64
 
-    axes[0].set_title("FFT: magnitud espectral")
+        # FFT: media +/- 1 sigma entre canales
+        mu_fft = fft_mag[:, mask_fft].mean(axis=0)
+        sd_fft = fft_mag[:, mask_fft].std(axis=0)
+        axes[0].fill_between(f_fft[mask_fft], mu_fft - sd_fft, mu_fft + sd_fft,
+                             color=color, alpha=0.25)
+        axes[0].plot(f_fft[mask_fft], mu_fft, color=color, linewidth=2.0, label=name)
+
+        # PSD: media +/- 1 sigma (limite inferior recortado para escala logaritmica)
+        mu_psd = psd[:, mask_psd].mean(axis=0)
+        sd_psd = psd[:, mask_psd].std(axis=0)
+        axes[1].fill_between(f_psd[mask_psd],
+                             np.maximum(mu_psd - sd_psd, 1e-12),
+                             mu_psd + sd_psd,
+                             color=color, alpha=0.25)
+        axes[1].semilogy(f_psd[mask_psd], mu_psd, color=color, linewidth=2.0, label=name)
+
+    axes[0].set_title("FFT: magnitud espectral (media ± 1σ entre 28 canales)")
     axes[0].set_ylabel("Magnitud")
     axes[0].grid(linestyle=":", alpha=0.4)
     axes[0].legend()
 
-    axes[1].set_title("PSD por Welch: potencia por Hz")
+    axes[1].set_title("PSD por Welch: densidad espectral de potencia (media ± 1σ)")
     axes[1].set_xlabel("Frecuencia (Hz)")
-    axes[1].set_ylabel("PSD")
+    axes[1].set_ylabel("PSD (V²/Hz)")
     axes[1].grid(linestyle=":", alpha=0.4)
     axes[1].legend()
 
@@ -95,7 +107,7 @@ def escenario1_bandas(segmentos, fs):
     ax.bar(x - width, resumen["before"], width, label="Before", color="steelblue")
     ax.bar(x, resumen["crisis"], width, label="Crisis", color="tomato")
     ax.bar(x + width, resumen["after"], width, label="After", color="seagreen")
-    ax.set_title("Escenario 1 - Potencia media por banda cerebral")
+    ax.set_title("Escenario 1 - Potencia media por banda cerebral (promedio de todos los canales)")
     ax.set_ylabel("Potencia media PSD")
     ax.set_xticks(x)
     ax.set_xticklabels([b.upper() for b in band_names])
@@ -132,14 +144,21 @@ def resumen_espectral_por_bloque(freqs, spectrum):
     }
 
 
-def escenario1_periodograma(segmentos, fs, labels, canal=0):
+def escenario1_periodograma(segmentos, fs, labels):
+    """
+    Periodograma por bloque.
+    Linea gruesa continua: media entre los 28 canales.
+    Banda sombreada: +/- 1 desv. estandar.
+    Linea discontinua: canal con mayor potencia total (el mas relevante).
+    """
     bloques = ["before", "crisis", "after"]
     colores = {"before": "steelblue", "crisis": "tomato", "after": "seagreen"}
     resumen = {}
 
     fig, ax = plt.subplots(figsize=(14, 6))
     fig.suptitle(
-        f"Escenario 1 - Periodograma por bloques - Canal {canal}",
+        "Escenario 1 - Periodograma por bloques\n"
+        "(continua: media | banda: ±1σ | discontinua: canal de maxima potencia)",
         fontsize=13,
         fontweight="bold",
     )
@@ -147,19 +166,30 @@ def escenario1_periodograma(segmentos, fs, labels, canal=0):
     for name in bloques:
         freqs, pxx = calcular_periodograma(segmentos[name], fs)
         resumen[name] = resumen_espectral_por_bloque(freqs, pxx)
-        ax.semilogy(
-            freqs[freqs <= 64],
-            pxx[canal, freqs <= 64],
-            color=colores[name],
-            alpha=0.85,
-            label=name,
-        )
+
+        color = colores[name]
+        mask = freqs <= 64
+
+        mu_pxx = pxx[:, mask].mean(axis=0)
+        sd_pxx = pxx[:, mask].std(axis=0)
+        ax.fill_between(freqs[mask],
+                        np.maximum(mu_pxx - sd_pxx, 1e-12),
+                        mu_pxx + sd_pxx,
+                        color=color, alpha=0.22)
+        ax.semilogy(freqs[mask], mu_pxx, color=color, linewidth=2.0, label=f"{name} (media)")
+
+        # Canal con maxima potencia total
+        best_ch = resumen[name]["best_channel"]
+        lbl = labels[best_ch] if best_ch < len(labels) else str(best_ch)
+        ax.semilogy(freqs[mask], pxx[best_ch, mask],
+                    color=color, linewidth=1.4, linestyle="--",
+                    label=f"{name} max: {lbl}")
 
     ax.set_title("Periodograma: estimacion directa de densidad espectral")
     ax.set_xlabel("Frecuencia (Hz)")
     ax.set_ylabel("Potencia/Hz")
     ax.grid(linestyle=":", alpha=0.4)
-    ax.legend()
+    ax.legend(fontsize=8)
     plt.tight_layout()
     plt.show()
 
@@ -190,13 +220,19 @@ def resumen_stft_por_bloque(freqs, power):
     }
 
 
-def escenario1_stft(segmentos, fs, labels, canal=0, window_sec=2, overlap=0.50):
+def escenario1_stft(segmentos, fs, labels, window_sec=2, overlap=0.50):
+    """
+    STFT por bloque como espectrograma (frecuencia x tiempo).
+    Se muestra el promedio de potencia entre todos los canales,
+    lo que reduce el ruido individual y revela la tendencia espectral general.
+    """
     bloques = ["before", "crisis", "after"]
     resumen = {}
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     fig.suptitle(
-        f"Escenario 1 - STFT por bloques - Canal {canal} | ventana={window_sec}s overlap={overlap:.0%}",
+        f"Escenario 1 - STFT por bloques - Promedio de todos los canales"
+        f" | ventana={window_sec}s overlap={overlap:.0%}",
         fontsize=13,
         fontweight="bold",
     )
@@ -205,10 +241,12 @@ def escenario1_stft(segmentos, fs, labels, canal=0, window_sec=2, overlap=0.50):
         freqs, times, power = calcular_stft(segmentos[name], fs, window_sec, overlap)
         resumen[name] = resumen_stft_por_bloque(freqs, power)
         mask = freqs <= 64
+
+        mean_power = power[:, mask, :].mean(axis=0)
         im = ax.pcolormesh(
             times,
             freqs[mask],
-            10 * np.log10(power[canal, mask, :] + 1e-12),
+            10 * np.log10(mean_power + 1e-12),
             shading="auto",
             cmap="viridis",
         )
@@ -217,7 +255,7 @@ def escenario1_stft(segmentos, fs, labels, canal=0, window_sec=2, overlap=0.50):
         ax.grid(linestyle=":", alpha=0.25)
 
     axes[0].set_ylabel("Frecuencia (Hz)")
-    fig.colorbar(im, ax=axes, label="Potencia (dB)")
+    fig.colorbar(im, ax=axes, label="Potencia media (dB)")
     plt.show()
 
     print("\nEscenario 1 - STFT")
@@ -245,7 +283,8 @@ def escenario1_scatter(segmentos, fs, labels):
 
     fig, ax = plt.subplots(figsize=(9, 7))
     fig.suptitle(
-        f"Escenario 1 - Scatter por canal: potencia {band_x.upper()} vs {band_y.upper()}",
+        f"Escenario 1 - Scatter por canal: potencia {band_x.upper()} vs {band_y.upper()}\n"
+        "(cada punto = un canal del EEG, 28 puntos por bloque)",
         fontsize=13,
         fontweight="bold",
     )
@@ -264,7 +303,8 @@ def escenario1_scatter(segmentos, fs, labels):
         ax.scatter(x, y, color=colores[name], alpha=0.75, s=45, label=name)
 
         for idx in np.argsort(y)[-2:]:
-            ax.annotate(labels[idx], (x[idx], y[idx]), fontsize=8, alpha=0.8, xytext=(4, 4), textcoords="offset points")
+            ax.annotate(labels[idx], (x[idx], y[idx]), fontsize=8, alpha=0.8,
+                        xytext=(4, 4), textcoords="offset points")
 
     ax.set_xlabel(f"Potencia {band_x.upper()} por canal")
     ax.set_ylabel(f"Potencia {band_y.upper()} por canal")
@@ -296,10 +336,10 @@ def ejecutar_registro(record_key):
 
     signals, fs, labels, _, segmentos, _ = cargar_datos(record_key)
     imprimir_resumen_carga(signals, fs, segmentos, record_key)
-    escenario1_fft_psd(segmentos, fs, canal=0)
+    escenario1_fft_psd(segmentos, fs)
     escenario1_bandas(segmentos, fs)
-    escenario1_periodograma(segmentos, fs, labels, canal=0)
-    escenario1_stft(segmentos, fs, labels, canal=0, window_sec=2, overlap=0.50)
+    escenario1_periodograma(segmentos, fs, labels)
+    escenario1_stft(segmentos, fs, labels, window_sec=2, overlap=0.50)
     escenario1_scatter(segmentos, fs, labels)
 
 

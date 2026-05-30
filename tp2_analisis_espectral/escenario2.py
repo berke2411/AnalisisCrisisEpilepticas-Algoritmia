@@ -55,6 +55,7 @@ def escenario2_espectrograma_bandas(segmentos, fs, refs, labels):
     """
     Prueba 3 tamanios de ventana y 3 overlaps.
     La mejor configuracion se elige por mayor aumento medio Crisis/Before.
+    El panel superior es un heatmap (canales x tiempo), el inferior muestra la evolucion temporal.
     """
     window_options = [1, 2, 4]
     overlap_options = [0.25, 0.50, 0.75]
@@ -103,15 +104,17 @@ def escenario2_espectrograma_bandas(segmentos, fs, refs, labels):
         extent=[times[0], times[-1], 0, values.shape[0] - 1],
         cmap="viridis",
     )
-    axes[0].axvspan(refs["crisis_ini_total_sec"], refs["crisis_fin_total_sec"], color="red", alpha=0.18, label="Crisis")
+    axes[0].axvspan(refs["crisis_ini_total_sec"], refs["crisis_fin_total_sec"],
+                    color="red", alpha=0.18, label="Crisis")
     axes[0].set_ylabel("Canal")
-    axes[0].set_title(f"Potencia {band.upper()} por canal y tiempo (dB)")
+    axes[0].set_title(f"Potencia {band.upper()} por canal y tiempo (dB) — Todos los canales")
     axes[0].legend(loc="upper right")
     fig.colorbar(im, ax=axes[0], label="dB")
 
     axes[1].plot(times, mean_band, color="steelblue", label="Promedio todos los canales")
     axes[1].plot(times, values[ch], color="tomato", label=f"Mejor canal: {labels[ch]}")
-    axes[1].axvspan(refs["crisis_ini_total_sec"], refs["crisis_fin_total_sec"], color="red", alpha=0.18, label="Crisis")
+    axes[1].axvspan(refs["crisis_ini_total_sec"], refs["crisis_fin_total_sec"],
+                    color="red", alpha=0.18, label="Crisis")
     axes[1].set_xlabel("Tiempo dentro del bloque total (s)")
     axes[1].set_ylabel(f"Potencia {band.upper()}")
     axes[1].set_title("Evolucion temporal de la banda mas discriminante")
@@ -158,7 +161,12 @@ def imprimir_frecuencias_dominantes(nombre, freqs, spectrum):
         print(f"  {f:6.2f} Hz  valor medio={amp:.6g}")
 
 
-def escenario2_fft_psd_total(segmentos, fs, refs, canal=0):
+def escenario2_fft_psd_total(segmentos, fs, refs):
+    """
+    FFT y PSD del bloque total concatenado [Before | Crisis | After].
+    Representacion: linea gruesa = media entre los 28 canales,
+    banda sombreada = +/- 1 desv. estandar.
+    """
     total = segmentos["total"]
     f_fft, fft_mag = calcular_fft(total, fs)
     f_psd, psd = calcular_psd_welch(total, fs)
@@ -168,21 +176,36 @@ def escenario2_fft_psd_total(segmentos, fs, refs, canal=0):
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 9))
     fig.suptitle(
-        f"Escenario 2 - FFT y PSD del bloque total - Canal {canal}",
+        "Escenario 2 - FFT y PSD del bloque total\n"
+        "(linea gruesa: media entre canales | banda: ±1 desv. estandar)",
         fontsize=13,
         fontweight="bold",
     )
 
-    axes[0].plot(f_fft[f_fft <= 64], fft_mag[canal, f_fft <= 64], color="steelblue")
-    axes[0].set_title("FFT del bloque total")
+    mask_fft = f_fft <= 64
+    mu_fft = fft_mag[:, mask_fft].mean(axis=0)
+    sd_fft = fft_mag[:, mask_fft].std(axis=0)
+    axes[0].fill_between(f_fft[mask_fft], mu_fft - sd_fft, mu_fft + sd_fft,
+                         color="steelblue", alpha=0.30)
+    axes[0].plot(f_fft[mask_fft], mu_fft, color="steelblue", linewidth=2.0, label="Media canales")
+    axes[0].set_title("FFT del bloque total (media ± 1σ entre 28 canales)")
     axes[0].set_ylabel("Magnitud")
     axes[0].grid(linestyle=":", alpha=0.4)
+    axes[0].legend()
 
-    axes[1].semilogy(f_psd[f_psd <= 64], psd[canal, f_psd <= 64], color="tomato")
-    axes[1].set_title("PSD por Welch del bloque total")
+    mask_psd = f_psd <= 64
+    mu_psd = psd[:, mask_psd].mean(axis=0)
+    sd_psd = psd[:, mask_psd].std(axis=0)
+    axes[1].fill_between(f_psd[mask_psd],
+                         np.maximum(mu_psd - sd_psd, 1e-12),
+                         mu_psd + sd_psd,
+                         color="tomato", alpha=0.30)
+    axes[1].semilogy(f_psd[mask_psd], mu_psd, color="tomato", linewidth=2.0, label="Media canales")
+    axes[1].set_title("PSD por Welch del bloque total (media ± 1σ)")
     axes[1].set_xlabel("Frecuencia (Hz)")
-    axes[1].set_ylabel("PSD")
+    axes[1].set_ylabel("PSD (V²/Hz)")
     axes[1].grid(linestyle=":", alpha=0.4)
+    axes[1].legend()
 
     plt.tight_layout()
     plt.show()
@@ -220,7 +243,8 @@ def escenario2_ventanas_bandas(segmentos, fs, refs, labels, window_sec=1, step_s
 
     fig, axes = plt.subplots(5, 1, figsize=(15, 12), sharex=True)
     fig.suptitle(
-        f"Escenario 2 - Potencia por bandas en ventanas de {window_sec}s",
+        f"Escenario 2 - Potencia media por banda en ventanas de {window_sec}s\n"
+        "(promedio de todos los canales por ventana | zona roja: crisis)",
         fontsize=13,
         fontweight="bold",
     )
@@ -268,7 +292,8 @@ def escenario2_scatter_ventanas(centros, labels_t, band_matrix):
     colores = {"before": "#4c78a8", "crisis": "#e45756", "after": "#54a24b"}
     fig, ax = plt.subplots(figsize=(9, 7))
     fig.suptitle(
-        "Escenario 2 - Scatter por ventanas: potencia BETA vs GAMMA",
+        "Escenario 2 - Scatter por ventanas: potencia BETA vs GAMMA\n"
+        "(cada punto = una ventana de 1s del bloque total)",
         fontsize=13,
         fontweight="bold",
     )
@@ -303,38 +328,55 @@ def escenario2_scatter_ventanas(centros, labels_t, band_matrix):
         )
 
 
-def escenario2_periodograma_stft(segmentos, fs, refs, canal=0):
+def escenario2_periodograma_stft(segmentos, fs, refs):
+    """
+    Periodograma del bloque total: linea = media, banda = +/- 1 sigma entre canales.
+    STFT del bloque total: espectrograma usando el promedio de todos los canales.
+    """
     total = segmentos["total"]
     freqs_p, pxx = calcular_periodograma(total, fs)
     freqs_s, times_s, power = calcular_stft(total, fs, window_sec=2, overlap=0.50)
 
     fig, axes = plt.subplots(2, 1, figsize=(15, 10))
     fig.suptitle(
-        f"Escenario 2 - Periodograma y STFT del bloque total - Canal {canal}",
+        "Escenario 2 - Periodograma y STFT del bloque total\n"
+        "(Periodograma: media ± 1σ entre canales | STFT: promedio de canales)",
         fontsize=13,
         fontweight="bold",
     )
 
-    axes[0].semilogy(freqs_p[freqs_p <= 64], pxx[canal, freqs_p <= 64], color="steelblue")
-    axes[0].set_title("Periodograma del bloque total")
+    # Periodograma: media ± 1 sigma
+    mask_p = freqs_p <= 64
+    mu_pxx = pxx[:, mask_p].mean(axis=0)
+    sd_pxx = pxx[:, mask_p].std(axis=0)
+    axes[0].fill_between(freqs_p[mask_p],
+                         np.maximum(mu_pxx - sd_pxx, 1e-12),
+                         mu_pxx + sd_pxx,
+                         color="steelblue", alpha=0.28)
+    axes[0].semilogy(freqs_p[mask_p], mu_pxx, color="steelblue", linewidth=2.0, label="Media canales")
+    axes[0].set_title("Periodograma del bloque total (media ± 1σ entre 28 canales)")
     axes[0].set_xlabel("Frecuencia (Hz)")
     axes[0].set_ylabel("Potencia/Hz")
     axes[0].grid(linestyle=":", alpha=0.4)
+    axes[0].legend()
 
-    mask = freqs_s <= 64
+    # STFT: promedio de todos los canales
+    mask_s = freqs_s <= 64
+    mean_power = power[:, mask_s, :].mean(axis=0)
     im = axes[1].pcolormesh(
         times_s,
-        freqs_s[mask],
-        10 * np.log10(power[canal, mask, :] + 1e-12),
+        freqs_s[mask_s],
+        10 * np.log10(mean_power + 1e-12),
         shading="auto",
         cmap="viridis",
     )
-    axes[1].axvspan(refs["crisis_ini_total_sec"], refs["crisis_fin_total_sec"], color="red", alpha=0.18, label="Crisis")
-    axes[1].set_title("STFT del bloque total")
+    axes[1].axvspan(refs["crisis_ini_total_sec"], refs["crisis_fin_total_sec"],
+                    color="red", alpha=0.18, label="Crisis")
+    axes[1].set_title("STFT del bloque total (promedio de todos los canales)")
     axes[1].set_xlabel("Tiempo dentro del bloque total (s)")
     axes[1].set_ylabel("Frecuencia (Hz)")
     axes[1].legend()
-    fig.colorbar(im, ax=axes[1], label="Potencia (dB)")
+    fig.colorbar(im, ax=axes[1], label="Potencia media (dB)")
     plt.tight_layout()
     plt.show()
 
@@ -364,10 +406,10 @@ def ejecutar_registro(record_key):
     signals, fs, labels, _, segmentos, refs = cargar_datos(record_key)
     imprimir_resumen_carga(signals, fs, segmentos, record_key)
     imprimir_bandas()
-    escenario2_fft_psd_total(segmentos, fs, refs, canal=0)
+    escenario2_fft_psd_total(segmentos, fs, refs)
     centros, labels_t, band_matrix = escenario2_ventanas_bandas(segmentos, fs, refs, labels, window_sec=1, step_sec=1)
     escenario2_scatter_ventanas(centros, labels_t, band_matrix)
-    escenario2_periodograma_stft(segmentos, fs, refs, canal=0)
+    escenario2_periodograma_stft(segmentos, fs, refs)
     escenario2_espectrograma_bandas(segmentos, fs, refs, labels)
 
 
